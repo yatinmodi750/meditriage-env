@@ -240,3 +240,15 @@ For Hugging Face Spaces:
 
 MIT License. This environment is for research and educational purposes.
 Clinical decisions must always be made by qualified medical professionals.
+---
+title: Meditriage Env
+emoji: 🏃
+colorFrom: green
+colorTo: indigo
+sdk: docker
+pinned: false
+license: mit
+short_description: MediTriage-Env — a medical triage OpenEnv environment
+---
+
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
