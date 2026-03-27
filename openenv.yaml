@@ -1,0 +1,115 @@
+name: MediTriage-Env
+version: "1.0.0"
+description: >
+  A medical triage environment where an AI agent must simultaneously assign
+  priority levels (P1–P4) and route patients (ICU/ER/Ward/Discharge) for a
+  stream of incoming patients. Reward is balanced across classification
+  accuracy and routing correctness, with penalties for critical delays and
+  resource violations.
+
+author: MediTriage Team
+license: MIT
+
+environment:
+  module: meditriage_env
+  class: MediTriageEnv
+  api:
+    reset: "reset(seed: Optional[int]) -> np.ndarray"
+    step:  "step(action: int) -> Tuple[np.ndarray, float, bool, dict]"
+    state: "state() -> dict"
+    render: "render(mode='human') -> str"
+
+observation_space:
+  type: Box
+  shape: [29]
+  low: 0.0
+  high: 1.0
+  dtype: float32
+  features:
+    - name: heart_rate_norm       # index 0
+      description: Heart rate / 220
+    - name: systolic_bp_norm      # 1
+      description: Systolic BP / 250
+    - name: diastolic_bp_norm     # 2
+      description: Diastolic BP / 150
+    - name: spo2_norm             # 3
+      description: SpO2 / 100
+    - name: temperature_norm      # 4
+      description: Temperature / 42
+    - name: pain_score_norm       # 5
+      description: Pain score / 10
+    - name: gcs_norm              # 6
+      description: Glasgow Coma Scale / 15
+    - name: age_norm              # 7
+      description: Age / 100
+    - name: gender                # 8
+      description: 0=M, 0.5=F, 1=Other (normalised)
+    - name: complaint_one_hot     # 9-23 (15 dims)
+      description: One-hot encoding of chief complaint
+    - name: arrival_time_norm     # 24
+      description: Minutes since shift start / 480
+    - name: queue_length_norm     # 25
+      description: Queue length at arrival / 50
+    - name: icu_beds_norm         # 26
+      description: ICU beds remaining / 20
+    - name: er_beds_norm          # 27
+      description: ER beds remaining / 40
+    - name: ward_beds_norm        # 28
+      description: Ward beds remaining / 60
+
+action_space:
+  type: Discrete
+  n: 16
+  description: >
+    action = priority * 4 + department
+    priority: 0=P1_IMMEDIATE, 1=P2_EMERGENT, 2=P3_URGENT, 3=P4_NON_URGENT
+    department: 0=ICU, 1=ER, 2=WARD, 3=DISCHARGE
+
+reward:
+  range: [-1.0, 1.0]
+  description: >
+    Balanced reward = 0.45 * priority_score + 0.45 * department_score
+                    - 0.05 * resource_penalty - 0.05 * under_triage_penalty
+    Scaled by criticality (P1=2x, P2=1.5x, P3=1x, P4=0.8x).
+    Partial credit: closer priority guesses score higher.
+
+tasks:
+  - id: easy
+    description: 20 patients, clean vitals, ample resources.
+    n_patients: 20
+    difficulty: 0
+    grader: graders.graders.easy_grader
+    score_range: [0.0, 1.0]
+    baseline_random: 0.0
+    baseline_heuristic: ~0.45
+
+  - id: medium
+    description: 50 patients, noisy vitals, moderate bed constraints.
+    n_patients: 50
+    difficulty: 1
+    grader: graders.graders.medium_grader
+    score_range: [0.0, 1.0]
+    baseline_random: ~0.05
+    baseline_heuristic: ~0.38
+
+  - id: hard
+    description: 80 patients, high missingness, severe constraints, 25% critical.
+    n_patients: 80
+    difficulty: 2
+    grader: graders.graders.hard_grader
+    score_range: [0.0, 1.0]
+    baseline_random: ~0.0
+    baseline_heuristic: ~0.30
+
+dependencies:
+  python: ">=3.9"
+  packages:
+    - numpy>=1.24
+
+setup:
+  install: pip install -e .
+  run_baseline: python scripts/baseline_inference.py
+  run_grader: |
+    from graders.graders import grade_all
+    results = grade_all(your_agent_fn)
+    print(results["overall_score"])

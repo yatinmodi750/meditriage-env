@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: meditriage-env
+Version: 1.0.0
+Summary: OpenEnv medical triage environment for RL agents
+Requires-Python: >=3.9
+Requires-Dist: numpy>=1.24
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pyyaml; extra == "dev"
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
