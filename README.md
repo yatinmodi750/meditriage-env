@@ -9,6 +9,9 @@ license: mit
 short_description: MediTriage-Env — a medical triage OpenEnv environment
 ---
 
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
+
 # 🏥 MediTriage-Env
 
 **A real-world OpenEnv environment for medical triage AI agents.**
@@ -251,5 +254,3 @@ For Hugging Face Spaces:
 
 MIT License. This environment is for research and educational purposes.
 Clinical decisions must always be made by qualified medical professionals.
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
