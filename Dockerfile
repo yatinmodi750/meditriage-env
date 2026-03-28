@@ -31,7 +31,7 @@ COPY openenv.yaml .
 COPY README.md .
 
 # Install the package itself
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 EXPOSE 7860
 

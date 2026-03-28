@@ -220,6 +220,7 @@ meditriage-env/
 ├── inference.py               # LLM inference script (competition entry)
 ├── baseline_results.json      # Official LLM baseline scores
 ├── setup.py                   # Package installation
+├── server.py                  # FastAPI HTTP Server
 ├── openenv.yaml               # OpenEnv specification
 ├── Dockerfile                 # HF Spaces deployment
 ├── README.md
