@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "meditriage-env"
+version = "1.0.0"
+description = "OpenEnv medical triage environment for RL/LLM agents"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "pydantic>=2.0",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev  = ["pytest", "pyyaml"]
+demo = ["gradio", "fastapi", "uvicorn"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["meditriage_env*", "graders*"]
