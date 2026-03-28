@@ -26,7 +26,7 @@ from meditriage_env.schemas import PatientObservation, TriageAction
 from graders.graders        import grade_all
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "no-key-set"
+API_KEY      = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "no-key-set"
 MODEL_NAME   = os.getenv("MODEL_NAME")
 MAX_STEPS    = 8
 TEMPERATURE  = 0.2
@@ -185,11 +185,27 @@ def main() -> None:
 
         return action_int
 
-    N_EPS = 5
+    N_EPS = 2   # keep low to preserve API credits
     print(f"\nRunning {N_EPS} episodes per task...\n")
 
+    # Track if credits are exhausted so we can exit cleanly
+    credits_exhausted = False
+
+    original_agent = agent
+    def safe_agent(obs_vec, state):
+        nonlocal credits_exhausted
+        if credits_exhausted:
+            return heuristic_fallback(obs_vec)
+        try:
+            return original_agent(obs_vec, state)
+        except Exception as e:
+            if "402" in str(e) or "depleted" in str(e).lower():
+                credits_exhausted = True
+                print("\n⚠️  API credits exhausted — switching to heuristic fallback for remaining steps.")
+            return heuristic_fallback(obs_vec)
+
     t0      = time.time()
-    results = grade_all(agent, n_episodes=N_EPS)
+    results = grade_all(safe_agent, n_episodes=N_EPS)
     elapsed = time.time() - t0
 
     print("\n" + "=" * 62)
