@@ -26,7 +26,7 @@ from meditriage_env.schemas import PatientObservation, TriageAction
 from graders.graders        import grade_all
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "no-key-set"
 MODEL_NAME   = os.getenv("MODEL_NAME")
 MAX_STEPS    = 8
 TEMPERATURE  = 0.2
