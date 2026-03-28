@@ -1,12 +1,10 @@
 """
 server/app.py — OpenEnv-compliant FastAPI server for MediTriage-Env.
-This is the required entry point for openenv validate.
 """
 from __future__ import annotations
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import os
 from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,6 +125,11 @@ async def root():
     })
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for openenv validate."""
     port = int(os.environ.get("PORT", 7860))
     uvicorn.run("server.app:app", host="0.0.0.0", port=port, reload=False)
+
+
+if __name__ == "__main__":
+    main()

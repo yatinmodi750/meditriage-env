@@ -23,7 +23,7 @@ dev  = ["pytest", "pyyaml"]
 demo = ["gradio"]
 
 [project.scripts]
-server = "server:app"
+server = "server.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
