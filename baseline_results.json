@@ -1,0 +1,32 @@
+{
+  "model": "llama-3.3-70b-versatile",
+  "api_base_url": "https://api.groq.com/openai/v1",
+  "n_episodes": 2,
+  "results": {
+    "overall_score": 0.665,
+    "easy": {
+      "task": "easy",
+      "score": 0.4667,
+      "priority_accuracy": 0.6,
+      "episodes": 2,
+      "description": "Priority classification accuracy (normalised above random)."
+    },
+    "medium": {
+      "task": "medium",
+      "score": 0.7954,
+      "mean_return": 0.6556,
+      "episodes": 2,
+      "description": "Mean episode reward (normalised to [0,1] above random baseline)."
+    },
+    "hard": {
+      "task": "hard",
+      "score": 0.666,
+      "mean_return": 0.5241,
+      "critical_accuracy": 0.1122,
+      "resource_viol_rate": 0.25,
+      "episodes": 2,
+      "description": "Composite: mean reward + 15% critical-patient bonus \u2013 10% resource-violation penalty."
+    }
+  },
+  "elapsed_seconds": 476.07
+}

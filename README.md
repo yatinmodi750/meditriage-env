@@ -1,17 +1,3 @@
----
-title: Meditriage Env
-emoji: 🏃
-colorFrom: green
-colorTo: indigo
-sdk: docker
-pinned: false
-license: mit
-short_description: MediTriage-Env — a medical triage OpenEnv environment
----
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
-
-
 # 🏥 MediTriage-Env
 
 **A real-world OpenEnv environment for medical triage AI agents.**
@@ -35,10 +21,10 @@ An agent must simultaneously assign **priority levels (P1–P4)** and **route pa
 ## Quick Start
 
 ```bash
-git clone https://github.com/yatinmodi750/meditriage-env
+git clone https://huggingface.co/spaces/YatinM/meditriage-env
 cd meditriage-env
 pip install -e .
-python scripts/baseline_inference.py
+python inference.py
 ```
 
 ---
@@ -187,15 +173,27 @@ hard_grader(my_agent)
 
 | Agent | Easy | Medium | Hard | Overall |
 |-------|------|--------|------|---------|
-| Random | ~0.00 | ~0.05 | ~0.00 | ~0.03 |
-| Heuristic | ~0.45 | ~0.38 | ~0.30 | ~0.35 |
-| Oracle (upper bound) | ~0.95 | ~0.88 | ~0.80 | ~0.85 |
+| Random | 0.017 | 0.641 | 0.620 | 0.506 |
+| Heuristic (rule-based) | 0.577 | 0.751 | 0.588 | 0.635 |
+| **Llama-3.3-70B-Instruct** | **0.467** | **0.795** | **0.666** | **0.665** |
+| Oracle (upper bound) | 1.000 | 0.996 | 0.989 | 0.993 |
 
-Run baselines yourself:
+> LLM baseline run with `meta-llama/Llama-3.3-70B-Instruct` via Groq API.
+> 2 episodes per task. Results saved in `baseline_results.json`.
+
+Run the LLM baseline yourself:
 
 ```bash
-python scripts/baseline_inference.py
+# Set your API credentials (Windows PowerShell)
+$env:API_KEY      = "your_key_here"
+$env:MODEL_NAME   = "llama-3.3-70b-versatile"
+$env:API_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Run inference
+python inference.py
 ```
+
+Run the heuristic baseline (no API key needed):
 
 ---
 
@@ -203,21 +201,27 @@ python scripts/baseline_inference.py
 
 ```
 meditriage-env/
-├── meditriage_env/
+├── inference.py               # LLM inference script (competition entry)
+├── baseline_results.json      # Official LLM baseline scores
+├── setup.py                   # Package installation
+├── openenv.yaml               # OpenEnv specification
+├── Dockerfile                 # HF Spaces deployment
+├── README.md
+│
+├── meditriage_env/            # Core environment package
+│   ├── __init__.py            # Package exports
+│   ├── env.py                 # MediTriageEnv — step/reset/state API
+│   ├── models.py              # Patient, Priority, Department typed models
+│   ├── patient_generator.py   # Procedural patient synthesis
+│   ├── reward.py              # Balanced reward function
+│   └── schemas.py             # Pydantic schemas (Observation, Action, Reward)
+│
+├── graders/                   # Task graders
 │   ├── __init__.py
-│   ├── env.py              # MediTriageEnv — main OpenEnv class
-│   ├── models.py           # Patient, Priority, Department, StepResult
-│   ├── patient_generator.py # Procedural patient synthesis
-│   └── reward.py           # Balanced reward function
-├── graders/
-│   └── graders.py          # easy_grader, medium_grader, hard_grader, grade_all
-├── scripts/
-│   ├── baseline_inference.py  # Reproducible baseline scores
-│   └── demo_app.py            # Gradio demo (Hugging Face Spaces)
-├── openenv.yaml            # OpenEnv specification
-├── Dockerfile              # HF Spaces deployment
-├── setup.py
-└── README.md
+│   └── graders.py             # easy_grader, medium_grader, hard_grader, grade_all
+│
+└── scripts/
+    └── demo_app.py            # Gradio demo for Hugging Face Spaces
 ```
 
 ---
@@ -241,10 +245,12 @@ For Hugging Face Spaces:
 ## Citation
 
 ```bibtex
-@misc{meditriage2024,
+@misc{meditriage2026,
   title  = {MediTriage-Env: A Medical Triage OpenEnv Environment},
-  year   = {2024},
-  note   = {OpenEnv benchmark for medical AI agents}
+  author = {Yatin Modi},
+  year   = {2026},
+  url    = {https://huggingface.co/spaces/YatinM/meditriage-env},
+  note   = {OpenEnv benchmark for medical AI triage agents}
 }
 ```
 
