@@ -4,30 +4,28 @@ LABEL org.opencontainers.image.source="https://github.com/yatinmodi750/meditriag
 
 WORKDIR /app
 
-# Copy all project files
+COPY pyproject.toml .
 COPY setup.py .
 COPY meditriage_env/ ./meditriage_env/
 COPY graders/ ./graders/
-COPY scripts/ ./scripts/
+COPY server/ ./server/
 COPY server.py .
+COPY scripts/ ./scripts/
 COPY openenv.yaml .
 COPY README.md .
 
-# Install all dependencies
 RUN pip install --no-cache-dir \
     numpy>=1.24 \
     pydantic>=2.0 \
     openai>=1.0 \
+    openenv-core>=0.2.0 \
     pyyaml \
     gradio \
     fastapi \
     uvicorn
 
-# Install the package
 RUN pip install --no-cache-dir .
 
-# Expose port
 EXPOSE 7860
 
-# Run FastAPI server (OpenEnv API) on port 7860
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]

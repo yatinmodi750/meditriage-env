@@ -8,16 +8,22 @@ version = "1.0.0"
 description = "OpenEnv medical triage environment for RL/LLM agents"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "pydantic>=2.0",
     "openai>=1.0",
+    "openenv-core>=0.2.0",
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
 dev  = ["pytest", "pyyaml"]
-demo = ["gradio", "fastapi", "uvicorn"]
+demo = ["gradio"]
+
+[project.scripts]
+server = "server:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
