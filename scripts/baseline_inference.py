@@ -1,125 +1,192 @@
 """
-baseline_inference.py — reproducible baseline scores for MediTriage-Env.
+baseline_inference.py — LLM-powered baseline for MediTriage-Env.
 
-Agents implemented:
-  1. RandomAgent         — uniform random action
-  2. HeuristicAgent      — rule-based vitals thresholds
-  3. OptimalOracleAgent  — cheats with ground truth (upper bound)
+Uses the OpenAI API client to run an LLM agent against all 3 tasks.
+Reads credentials from environment variables:
+    OPENAI_API_KEY   (required)
+    OPENAI_BASE_URL  (optional, defaults to https://api.openai.com/v1)
+    OPENAI_MODEL     (optional, defaults to gpt-4o-mini)
 
-Run:
+Usage:
+    export OPENAI_API_KEY=sk-...
+    python scripts/baseline_inference.py
+
+    # Or with a custom model / base URL (e.g. for OpenRouter):
+    OPENAI_BASE_URL=https://openrouter.ai/api/v1 \
+    OPENAI_MODEL=mistralai/mistral-7b-instruct \
     python scripts/baseline_inference.py
 """
 from __future__ import annotations
-import sys, os
+import os, sys, json, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
-from meditriage_env import MediTriageEnv, NUM_ACTIONS, action_to_pd, pd_to_action
-from meditriage_env.models import Priority, Department
-from graders.graders import grade_all
+from openai import OpenAI
+
+from meditriage_env          import MediTriageEnv, NUM_ACTIONS
+from meditriage_env.schemas  import PatientObservation, TriageAction
+from graders.graders         import grade_all
 
 
-# ── 1. Random Agent ───────────────────────────────────────────────────────────
+# ── OpenAI client setup ───────────────────────────────────────────────────────
 
-_rng = np.random.default_rng(0)
+def get_client() -> OpenAI:
+    api_key  = os.environ.get("OPENAI_API_KEY")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    if not api_key:
+        raise EnvironmentError(
+            "OPENAI_API_KEY not set.\n"
+            "Run: export OPENAI_API_KEY=sk-..."
+        )
+    return OpenAI(api_key=api_key, base_url=base_url)
 
-def random_agent(obs: np.ndarray, state: dict) -> int:
-    return int(_rng.integers(0, NUM_ACTIONS))
+
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+SYSTEM_PROMPT = """You are an expert emergency medicine physician performing triage.
+
+For each patient, you must decide:
+1. PRIORITY — how urgently they need care:
+   - P1_IMMEDIATE : Life-threatening. Act within minutes.
+   - P2_EMERGENT  : High risk. Act within 15 minutes.
+   - P3_URGENT    : Stable but needs care within 1 hour.
+   - P4_NON_URGENT: Minor complaint, can safely wait 2+ hours.
+
+2. DEPARTMENT — where to route them:
+   - ICU       : Intensive Care Unit (for critical, life-threatening cases)
+   - ER        : Emergency Room (for urgent/emergent cases needing immediate workup)
+   - WARD      : General Ward (for stable patients needing admission)
+   - DISCHARGE : Safe to discharge or refer to outpatient care
+
+CRITICAL RULES:
+- Never route a patient to a department with 0 beds available.
+- P1/P2 patients must never be sent to WARD or DISCHARGE unless all other options are full.
+- Consider ALL vitals carefully — missing values (shown as 0) may indicate monitoring failure.
+
+Respond ONLY with valid JSON in this exact format:
+{"priority": "P2_EMERGENT", "department": "ER"}
+
+No explanation. No preamble. JSON only."""
 
 
-# ── 2. Heuristic Agent ────────────────────────────────────────────────────────
+def make_user_prompt(obs: PatientObservation) -> str:
+    return f"Triage this patient:\n\n{obs.to_text()}\n\nRespond with JSON only."
 
-def heuristic_agent(obs: np.ndarray, state: dict) -> int:
+
+# ── LLM Agent ─────────────────────────────────────────────────────────────────
+
+class LLMAgent:
     """
-    Rule-based agent using normalised observation indices.
-    Obs layout: [HR, SBP, DBP, SpO2, Temp, Pain, GCS,  ← indices 0-6
-                 Age, Gender,                           ← 7-8
-                 complaint_one_hot (15),                ← 9-23
-                 arrival_time, queue, icu, er, ward]    ← 24-28
+    Calls OpenAI API for each triage decision.
+    Falls back to heuristic if API call fails.
     """
-    hr   = obs[0] * 220
-    sbp  = obs[1] * 250
-    spo2 = obs[3] * 100
-    gcs  = obs[6] * 15
-    pain = obs[5] * 10
 
-    # ── Priority heuristic ────────────────────────────────────────────────────
-    if gcs < 9 or spo2 < 88 or sbp < 75 or hr > 160:
-        priority = Priority.P1_IMMEDIATE
-    elif gcs < 13 or spo2 < 93 or sbp < 95 or pain >= 8:
-        priority = Priority.P2_EMERGENT
-    elif pain >= 5 or spo2 < 96:
-        priority = Priority.P3_URGENT
-    else:
-        priority = Priority.P4_NON_URGENT
+    def __init__(self, client: OpenAI, model: str, verbose: bool = False):
+        self.client  = client
+        self.model   = model
+        self.verbose = verbose
 
-    # ── Department heuristic ──────────────────────────────────────────────────
-    icu_avail  = obs[26] * 20 > 0   # icu_beds_left
-    er_avail   = obs[27] * 40 > 0
+    def __call__(self, obs_vec: np.ndarray, state: dict) -> int:
+        step       = state["step"]
+        n_patients = state["n_patients"]
 
-    if priority == Priority.P1_IMMEDIATE and icu_avail:
-        dept = Department.ICU
-    elif priority in (Priority.P1_IMMEDIATE, Priority.P2_EMERGENT) and er_avail:
-        dept = Department.ER
-    elif priority == Priority.P3_URGENT:
-        dept = Department.WARD
-    else:
-        dept = Department.DISCHARGE
+        obs = PatientObservation.from_vector(
+            list(obs_vec.astype(float)),
+            patient_id  = step,
+            step        = step,
+            total_steps = n_patients,
+        )
 
-    return pd_to_action(priority, dept)
+        try:
+            response = self.client.chat.completions.create(
+                model    = self.model,
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": make_user_prompt(obs)},
+                ],
+                temperature = 0.0,
+                max_tokens  = 60,
+            )
+            raw_text = response.choices[0].message.content.strip()
+            action   = TriageAction.from_text(raw_text)
 
+            if self.verbose:
+                print(f"  Step {step+1:02d}/{n_patients} | {action.priority} → {action.department}")
 
-# ── 3. Oracle Agent (upper bound) ─────────────────────────────────────────────
+            return action.to_int()
 
-class OracleAgent:
-    """Peeks at ground truth — not a valid agent, sets upper bound only."""
-    def __init__(self, task: str):
-        self._env = MediTriageEnv(task=task)
+        except Exception as e:
+            if self.verbose:
+                print(f"  Step {step+1:02d} | API error ({e}) — heuristic fallback")
+            return self._heuristic_fallback(obs_vec)
 
-    def __call__(self, obs: np.ndarray, state: dict) -> int:
-        step = state["step"]
-        if step >= len(self._env._patients):
-            return 0
-        p = self._env._patients[step]
-        return pd_to_action(p.true_priority, p.true_department)
+    def _heuristic_fallback(self, obs: np.ndarray) -> int:
+        from meditriage_env.models import Priority, Department
+        from meditriage_env        import pd_to_action
+
+        hr = obs[0] * 220; spo2 = obs[3] * 100
+        sbp = obs[1] * 250; gcs = obs[6] * 15; pain = obs[5] * 10
+        icu = obs[26] * 20 > 0; er = obs[27] * 40 > 0
+
+        if gcs < 9 or spo2 < 88 or sbp < 75 or hr > 160:
+            prio = Priority.P1_IMMEDIATE
+        elif gcs < 13 or spo2 < 93 or sbp < 95 or pain >= 8:
+            prio = Priority.P2_EMERGENT
+        elif pain >= 5 or spo2 < 96:
+            prio = Priority.P3_URGENT
+        else:
+            prio = Priority.P4_NON_URGENT
+
+        if prio == Priority.P1_IMMEDIATE and icu:
+            dept = Department.ICU
+        elif prio in (Priority.P1_IMMEDIATE, Priority.P2_EMERGENT) and er:
+            dept = Department.ER
+        elif prio == Priority.P3_URGENT:
+            dept = Department.WARD
+        else:
+            dept = Department.DISCHARGE
+
+        return pd_to_action(prio, dept)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    N = 20   # episodes per grader
+    print("=" * 62)
+    print("  MediTriage-Env — LLM Baseline Inference")
+    print(f"  Model : {MODEL}")
+    print("=" * 62)
 
-    print("=" * 60)
-    print("  MediTriage-Env  —  Baseline Inference Report")
-    print("=" * 60)
+    try:
+        client = get_client()
+    except EnvironmentError as e:
+        print(f"\n❌  {e}")
+        sys.exit(1)
 
-    for name, agent in [("Random", random_agent), ("Heuristic", heuristic_agent)]:
-        print(f"\n▶  Agent: {name}")
-        results = grade_all(agent, n_episodes=N)
-        print(f"   Overall score : {results['overall_score']:.4f}")
-        for task in ("easy", "medium", "hard"):
-            t = results[task]
-            print(f"   {task.capitalize():7s} score : {t['score']:.4f}   ({t['description'][:55]})")
+    agent   = LLMAgent(client, MODEL, verbose=True)
+    N_EPS   = 5   # keep low to manage API costs
 
-    print("\n" + "=" * 60)
-    print("  Oracle upper bounds (cheats with ground truth)")
-    print("=" * 60)
+    print(f"\nRunning {N_EPS} episodes per task...\n")
+    t0      = time.time()
+    results = grade_all(agent, n_episodes=N_EPS)
+    elapsed = time.time() - t0
+
+    print("\n" + "=" * 62)
+    print("  Results")
+    print("=" * 62)
+    print(f"  Overall score : {results['overall_score']:.4f}")
     for task in ("easy", "medium", "hard"):
-        oracle = OracleAgent(task)
-        # Pre-populate patients by resetting
-        env = MediTriageEnv(task=task)
-        oracle._env = env
-        scores = []
-        for ep in range(N):
-            obs = env.reset(seed=ep)
-            oracle._env = env
-            done = False
-            ep_rewards = []
-            while not done:
-                action = oracle(obs, env.state())
-                obs, r, done, _ = env.step(action)
-                ep_rewards.append(r)
-            scores.append(np.mean(ep_rewards))
-        print(f"   {task.capitalize():7s} mean reward: {np.mean(scores):.4f}")
+        print(f"  {task.capitalize():7s} score : {results[task]['score']:.4f}")
+    print(f"\n  Time elapsed  : {elapsed:.1f}s  |  Model: {MODEL}")
 
+    # Save results for reproducibility
+    out_path = os.path.join(os.path.dirname(__file__), "..", "baseline_results.json")
+    with open(out_path, "w") as f:
+        json.dump({
+            "model":           MODEL,
+            "n_episodes":      N_EPS,
+            "results":         results,
+            "elapsed_seconds": round(elapsed, 2),
+        }, f, indent=2)
+    print(f"  Results saved → baseline_results.json")
     print("\nDone. ✓")

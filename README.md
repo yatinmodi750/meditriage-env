@@ -35,7 +35,7 @@ An agent must simultaneously assign **priority levels (P1–P4)** and **route pa
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USER/meditriage-env
+git clone https://github.com/yatinmodi750/meditriage-env
 cd meditriage-env
 pip install -e .
 python scripts/baseline_inference.py
