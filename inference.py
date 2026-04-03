@@ -25,15 +25,17 @@ from meditriage_env         import MediTriageEnv
 from meditriage_env.schemas import PatientObservation, TriageAction
 from graders.graders        import grade_all
 
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY      = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "no-key-set"
-MODEL_NAME   = os.getenv("MODEL_NAME")
-MAX_STEPS    = 8
-TEMPERATURE  = 0.2
-MAX_TOKENS   = 200
-FALLBACK_ACTION = "P3_URGENT,ER"
+# ── Environment variables (exactly as required by checklist) ──────────────────
+API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME       = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+HF_TOKEN         = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-DEBUG = True
+MAX_STEPS       = 8
+TEMPERATURE     = 0.2
+MAX_TOKENS      = 200
+FALLBACK_ACTION = "P3_URGENT,ER"
+DEBUG           = True
 
 ACTION_PATTERN = re.compile(
     r'"priority"\s*:\s*"(\w+)".*?"department"\s*:\s*"(\w+)"',
@@ -78,7 +80,6 @@ def parse_model_action(response_text: str) -> int:
     """Parse LLM response into an integer action. Falls back to FALLBACK_ACTION."""
     if not response_text:
         return TriageAction.from_text(FALLBACK_ACTION).to_int()
-
     try:
         action = TriageAction.from_text(response_text)
         return action.to_int()
@@ -123,21 +124,18 @@ def heuristic_fallback(obs_vec: np.ndarray) -> int:
 def main() -> None:
     import json, time
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # OpenAI client configured via required env variables
+    from openai import OpenAI
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "no-key-set")
 
-    print("=" * 62)
-    print("  MediTriage-Env — Inference Script")
-    print(f"  API_BASE_URL : {API_BASE_URL}")
-    print(f"  MODEL_NAME   : {MODEL_NAME}")
-    print(f"  API_KEY set  : {'yes' if API_KEY else 'NO — set HF_TOKEN or API_KEY'}")
-    print("=" * 62)
+    # START log (required structured format)
+    print("[START]")
+    print(f"[START] API_BASE_URL={API_BASE_URL}")
+    print(f"[START] MODEL_NAME={MODEL_NAME}")
+    print(f"[START] HF_TOKEN={'set' if HF_TOKEN else 'NOT SET'}")
 
-    if not API_KEY:
-        print("\n❌  No API key. Set HF_TOKEN or API_KEY.")
-        return
-
-    if not MODEL_NAME:
-        print("\n❌  MODEL_NAME not set.")
+    if not HF_TOKEN:
+        print("[END] ERROR: HF_TOKEN not set.")
         return
 
     def agent(obs_vec: np.ndarray, state: dict) -> int:
@@ -173,25 +171,24 @@ def main() -> None:
             )
             response_text = completion.choices[0].message.content or ""
         except Exception as exc:
-            failure_msg = f"Model request failed ({exc}). Using fallback action."
-            print(failure_msg)
+            print(f"[STEP] Model request failed ({exc}). Using fallback action.")
             return heuristic_fallback(obs_vec)
 
         action_int = parse_model_action(response_text)
 
         if DEBUG:
             action_obj = TriageAction.from_int(action_int)
-            print(f"  Step {step+1:02d}/{n_patients} → {action_obj.priority} / {action_obj.department}")
+            # STEP log (required structured format)
+            print(f"[STEP] step={step+1}/{n_patients} action={action_obj.priority}/{action_obj.department}")
 
         return action_int
 
-    N_EPS = 2   # keep low to preserve API credits
-    print(f"\nRunning {N_EPS} episodes per task...\n")
+    N_EPS = 2
+    print(f"[START] Running {N_EPS} episodes per task...")
 
-    # Track if credits are exhausted so we can exit cleanly
     credits_exhausted = False
-
     original_agent = agent
+
     def safe_agent(obs_vec, state):
         nonlocal credits_exhausted
         if credits_exhausted:
@@ -199,22 +196,27 @@ def main() -> None:
         try:
             return original_agent(obs_vec, state)
         except Exception as e:
-            if "402" in str(e) or "depleted" in str(e).lower():
+            err = str(e).lower()
+            if "402" in str(e) or "depleted" in err:
                 credits_exhausted = True
-                print("\n⚠️  API credits exhausted — switching to heuristic fallback for remaining steps.")
+                print("[STEP] WARNING: API credits exhausted — switching to heuristic fallback.")
+            elif "401" in str(e) or "invalid" in err or "unauthorized" in err:
+                credits_exhausted = True
+                print("[STEP] WARNING: API auth failed — switching to heuristic fallback.")
+            else:
+                print(f"[STEP] WARNING: API error: {e} — using heuristic fallback.")
             return heuristic_fallback(obs_vec)
 
     t0      = time.time()
     results = grade_all(safe_agent, n_episodes=N_EPS)
     elapsed = time.time() - t0
 
-    print("\n" + "=" * 62)
-    print("  Results")
-    print("=" * 62)
-    print(f"  Overall score : {results['overall_score']:.4f}")
+    # END log (required structured format)
+    print("[END]")
+    print(f"[END] overall_score={results['overall_score']:.4f}")
     for task in ("easy", "medium", "hard"):
-        print(f"  {task.capitalize():7s} score : {results[task]['score']:.4f}")
-    print(f"\n  Elapsed : {elapsed:.1f}s  |  Model : {MODEL_NAME}")
+        print(f"[END] {task}_score={results[task]['score']:.4f}")
+    print(f"[END] elapsed={elapsed:.1f}s model={MODEL_NAME}")
 
     out = {
         "model":           MODEL_NAME,
@@ -225,8 +227,7 @@ def main() -> None:
     }
     with open("baseline_results.json", "w") as f:
         json.dump(out, f, indent=2)
-    print("  Saved → baseline_results.json")
-    print("\nDone. ✓")
+    print("[END] Saved → baseline_results.json")
 
 
 if __name__ == "__main__":
