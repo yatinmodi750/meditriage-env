@@ -212,10 +212,20 @@ def main() -> None:
     elapsed = time.time() - t0
 
     # END log (required structured format)
+    # Scores must be strictly between 0 and 1 — enforce before printing
+    def safe_score(v):
+        return max(0.01, min(0.99, float(v)))
+
+    overall = safe_score(results["overall_score"])
+    easy_s  = safe_score(results["easy"]["score"])
+    med_s   = safe_score(results["medium"]["score"])
+    hard_s  = safe_score(results["hard"]["score"])
+
     print("[END]")
-    print(f"[END] overall_score={results['overall_score']:.4f}")
-    for task in ("easy", "medium", "hard"):
-        print(f"[END] {task}_score={results[task]['score']:.4f}")
+    print(f"[END] overall_score={overall}")
+    print(f"[END] easy_score={easy_s}")
+    print(f"[END] medium_score={med_s}")
+    print(f"[END] hard_score={hard_s}")
     print(f"[END] elapsed={elapsed:.1f}s model={MODEL_NAME}")
 
     out = {
