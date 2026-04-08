@@ -53,7 +53,7 @@ def easy_grader(agent_fn, n_episodes: int = 10, seed: int = 0) -> dict:
 
     accuracy = correct_priority / max(total, 1)
     # Map: random baseline ~0.25, perfect = 1.0 → normalise to [0, 1]
-    score = float(np.clip((accuracy - 0.25) / 0.75, 0.0, 1.0))
+    score = float(np.clip((accuracy - 0.25) / 0.75, 0.001, 0.999))
 
     return {
         "task":             "easy",
@@ -78,7 +78,7 @@ def medium_grader(agent_fn, n_episodes: int = 10, seed: int = 100) -> dict:
 
     # Empirical range: random ≈ -0.1, perfect ≈ 0.85
     lo, hi = -0.10, 0.85
-    score = float(np.clip((mean_return - lo) / (hi - lo), 0.0, 1.0))
+    score = float(np.clip((mean_return - lo) / (hi - lo), 0.001, 0.999))
 
     return {
         "task":         "medium",
@@ -135,10 +135,10 @@ def hard_grader(agent_fn, n_episodes: int = 10, seed: int = 200) -> dict:
     viol_rate      = resource_viol / max(total_steps, 1)
 
     lo, hi = -0.15, 0.85
-    base_score     = float(np.clip((mean_rew - lo) / (hi - lo), 0.0, 1.0))
+    base_score     = float(np.clip((mean_rew - lo) / (hi - lo), 0.001, 0.999))
     bonus          = 0.15 * critical_acc
     penalty        = 0.10 * viol_rate
-    score          = float(np.clip(base_score + bonus - penalty, 0.0, 1.0))
+    score          = float(np.clip(base_score + bonus - penalty, 0.001, 0.999))
 
     return {
         "task":              "hard",
@@ -165,6 +165,7 @@ def grade_all(agent_fn, n_episodes: int = 10) -> dict:
     # Weighted overall: easy=0.2, medium=0.3, hard=0.5
     overall = 0.2 * easy["score"] + 0.3 * medium["score"] + 0.5 * hard["score"]
 
+    overall = float(np.clip(overall, 0.001, 0.999))
     return {
         "overall_score": round(overall, 4),
         "easy":          easy,
