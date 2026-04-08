@@ -27,7 +27,7 @@ An agent must simultaneously assign **priority levels (P1–P4)** and **route pa
 |---|---|
 | **Observation space** | `Box(29,)` — vitals, demographics, complaint, queue context |
 | **Action space** | `Discrete(16)` — (4 priorities) × (4 departments) |
-| **Reward** | `[-1.0, 1.0]` — balanced accuracy + routing + criticality |
+| **Reward** | `(-1.0, 1.0)` — balanced accuracy + routing + criticality |
 | **Tasks** | `easy` (20 patients) · `medium` (50) · `hard` (80) |
 | **API** | `step()` / `reset()` / `state()` |
 
