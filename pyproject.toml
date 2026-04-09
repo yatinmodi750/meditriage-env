@@ -27,4 +27,4 @@ server = "server.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["meditriage_env*", "graders*"]
+include = ["meditriage_env*", "graders*", "server*"]

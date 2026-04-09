@@ -2,7 +2,26 @@ name: MediTriage-Env
 version: "1.0.0"
 description: >
   A medical triage environment where an AI agent must simultaneously assign
-  priority levels (P1–P4) and route patients (ICU/ER/Ward/Discharge) for a
+  priority levels (P1-P4) and route patients (ICU/ER/Ward/Discharge) for a
   stream of incoming patients. Reward is balanced across classification
   accuracy and routing correctness, with penalties for critical delays and
   resource violations.
+
+tasks:
+  - id: easy
+    name: Easy Triage
+    description: 20 patients, clean vitals, ample resources. Learn basic triage.
+    grader: graders.graders.easy_grader
+    score_range: [0.0, 1.0]
+
+  - id: medium
+    name: Medium Triage
+    description: 50 patients, noisy/missing vitals, moderate bed constraints.
+    grader: graders.graders.medium_grader
+    score_range: [0.0, 1.0]
+
+  - id: hard
+    name: Hard Triage
+    description: 80 patients, severe constraints, 25% critical edge cases.
+    grader: graders.graders.hard_grader
+    score_range: [0.0, 1.0]
