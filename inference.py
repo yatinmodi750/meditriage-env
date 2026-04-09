@@ -3,47 +3,51 @@ Inference Script — MediTriage-Env
 ===================================
 MANDATORY
 - Before submitting, ensure the following variables are defined in your environment configuration:
-    API_BASE_URL   The API endpoint for the LLM.
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
+    API_BASE_URL     The API endpoint for the LLM.
+    MODEL_NAME       The model identifier to use for inference.
+    HF_TOKEN         Your Hugging Face / API key.
+    LOCAL_IMAGE_NAME The name of the local image (if using from_docker_image())
 
-- The inference script must be named `inference.py` and placed in the root directory of the project
+- Defaults are set only for API_BASE_URL and MODEL_NAME:
+    API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
+    MODEL_NAME   = os.getenv("MODEL_NAME",   "<your-active-model>")
+
+- The inference script must be named `inference.py` and placed in the root directory
 - Participants must use OpenAI Client for all LLM calls using above variables
+
+STDOUT FORMAT:
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
 import os
 import re
-import base64
 import textwrap
-from io import BytesIO
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 from openai import OpenAI
 import numpy as np
 
 from meditriage_env         import MediTriageEnv
 from meditriage_env.schemas import PatientObservation, TriageAction
-from graders.graders        import grade_all
 
-# ── Environment variables (exactly as required by checklist) ──────────────────
+# ── Environment variables ─────────────────────────────────────────────────────
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME       = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_NAME       = os.getenv("MODEL_NAME",   "meta-llama/Llama-3.3-70B-Instruct")
 HF_TOKEN         = os.getenv("HF_TOKEN")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-MAX_STEPS       = 8
-TEMPERATURE     = 0.2
-MAX_TOKENS      = 200
-FALLBACK_ACTION = "P3_URGENT,ER"
-DEBUG           = True
+TASK_NAME  = os.getenv("MEDITRIAGE_TASK", "medium")
+BENCHMARK  = "meditriage-env"
 
-ACTION_PATTERN = re.compile(
-    r'"priority"\s*:\s*"(\w+)".*?"department"\s*:\s*"(\w+)"',
-    re.DOTALL,
-)
+MAX_STEPS             = 80
+TEMPERATURE           = 0.2
+MAX_TOKENS            = 200
+SUCCESS_SCORE_THRESHOLD = 0.3
+FALLBACK_ACTION       = "P3_URGENT,ER"
 
-SYSTEM_PROMPT = textwrap.dedent(
-    """
+SYSTEM_PROMPT = textwrap.dedent("""
     You are an expert emergency medicine physician performing triage.
 
     For each patient, decide:
@@ -62,35 +66,41 @@ SYSTEM_PROMPT = textwrap.dedent(
     RULES:
     - Never route to a department with 0 beds available.
     - P1/P2 patients must not go to WARD or DISCHARGE unless all options are full.
-    - Missing vitals (shown as 0) may indicate monitoring failure — treat cautiously.
+    - Missing vitals (shown as 0) may indicate monitoring failure.
 
-    Respond ONLY with valid JSON, exactly like this:
+    Respond ONLY with valid JSON:
     {"priority": "P2_EMERGENT", "department": "ER"}
 
     No explanation. No preamble. JSON only.
-    """
-).strip()
+""").strip()
 
 
-def build_patient_prompt(obs: PatientObservation) -> str:
-    return f"Triage this patient:\n\n{obs.to_text()}\n\nRespond with JSON only."
+# ── Structured log helpers (exact format required) ────────────────────────────
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def parse_model_action(response_text: str) -> int:
-    """Parse LLM response into an integer action. Falls back to FALLBACK_ACTION."""
-    if not response_text:
-        return TriageAction.from_text(FALLBACK_ACTION).to_int()
-    try:
-        action = TriageAction.from_text(response_text)
-        return action.to_int()
-    except Exception:
-        if DEBUG:
-            print(f"  Could not parse response: {response_text!r} — using fallback")
-        return TriageAction.from_text(FALLBACK_ACTION).to_int()
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val  = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ── Agent helpers ─────────────────────────────────────────────────────────────
 
 def heuristic_fallback(obs_vec: np.ndarray) -> int:
-    """Rule-based fallback used when LLM call fails."""
     from meditriage_env.models import Priority, Department
     from meditriage_env        import pd_to_action
 
@@ -121,123 +131,99 @@ def heuristic_fallback(obs_vec: np.ndarray) -> int:
     return pd_to_action(prio, dept)
 
 
-def main() -> None:
-    import json, time
+def get_model_action(client: OpenAI, obs_vec: np.ndarray, state: dict) -> tuple[int, str]:
+    """Returns (action_int, action_str). Falls back to heuristic on failure."""
+    step       = state["step"]
+    n_patients = state["n_patients"]
 
-    # OpenAI client configured via required env variables
-    from openai import OpenAI
+    obs = PatientObservation.from_vector(
+        list(obs_vec.astype(float)),
+        patient_id  = step,
+        step        = step,
+        total_steps = n_patients,
+    )
+
+    user_prompt = f"Triage this patient:\n\n{obs.to_text()}\n\nRespond with JSON only."
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user",   "content": user_prompt},
+    ]
+
+    try:
+        completion = client.chat.completions.create(
+            model       = MODEL_NAME,
+            messages    = messages,
+            temperature = TEMPERATURE,
+            max_tokens  = MAX_TOKENS,
+            stream      = False,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        action = TriageAction.from_text(text)
+        return action.to_int(), f"{action.priority}/{action.department}"
+    except Exception as exc:
+        print(f"[DEBUG] Model request failed: {exc}", flush=True)
+        action_int = heuristic_fallback(obs_vec)
+        action_obj = TriageAction.from_int(action_int)
+        return action_int, f"{action_obj.priority}/{action_obj.department}"
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "no-key-set")
 
-    # START log (required structured format)
-    print("[START]")
-    print(f"[START] API_BASE_URL={API_BASE_URL}")
-    print(f"[START] MODEL_NAME={MODEL_NAME}")
-    print(f"[START] HF_TOKEN={'set' if HF_TOKEN else 'NOT SET'}")
+    task      = TASK_NAME if TASK_NAME in ("easy", "medium", "hard") else "medium"
+    rewards:  List[float] = []
+    steps_taken = 0
+    score       = 0.0
+    success     = False
 
-    if not HF_TOKEN:
-        print("[END] ERROR: HF_TOKEN not set.")
-        return
+    log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
 
-    def agent(obs_vec: np.ndarray, state: dict) -> int:
-        step       = state["step"]
-        n_patients = state["n_patients"]
+    try:
+        env = MediTriageEnv(task=task)
+        obs = env.reset(seed=42)
 
-        obs = PatientObservation.from_vector(
-            list(obs_vec.astype(float)),
-            patient_id  = step,
-            step        = step,
-            total_steps = n_patients,
-        )
+        for step in range(1, MAX_STEPS + 1):
+            if env._done:
+                break
 
-        user_prompt = build_patient_prompt(obs)
-        messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": SYSTEM_PROMPT}],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": user_prompt}],
-            },
-        ]
+            action_int, action_str = get_model_action(client, obs, env.state())
+            obs, reward, done, info = env.step(action_int)
 
-        try:
-            completion = client.chat.completions.create(
-                model       = MODEL_NAME,
-                messages    = messages,
-                temperature = TEMPERATURE,
-                max_tokens  = MAX_TOKENS,
-                stream      = False,
+            reward = float(reward)
+            rewards.append(reward)
+            steps_taken = step
+
+            log_step(
+                step   = step,
+                action = action_str,
+                reward = reward,
+                done   = done,
+                error  = None,
             )
-            response_text = completion.choices[0].message.content or ""
-        except Exception as exc:
-            print(f"[STEP] Model request failed ({exc}). Using fallback action.")
-            return heuristic_fallback(obs_vec)
 
-        action_int = parse_model_action(response_text)
+            if done:
+                break
 
-        if DEBUG:
-            action_obj = TriageAction.from_int(action_int)
-            # STEP log (required structured format)
-            print(f"[STEP] step={step+1}/{n_patients} action={action_obj.priority}/{action_obj.department}")
+        # Score: normalise mean reward from [-1,1] to (0,1) strictly
+        if rewards:
+            mean_reward = float(np.mean(rewards))
+            raw_score   = (mean_reward + 1.0) / 2.0   # maps [-1,1] → [0,1]
+        else:
+            raw_score = 0.5
 
-        return action_int
+        # Strictly enforce (0, 1) — never exactly 0.0 or 1.0
+        score   = max(0.01, min(0.99, raw_score))
+        success = score >= SUCCESS_SCORE_THRESHOLD
 
-    N_EPS = 2
-    print(f"[START] Running {N_EPS} episodes per task...")
+    except Exception as e:
+        print(f"[DEBUG] Episode error: {e}", flush=True)
+        score   = 0.01
+        success = False
 
-    credits_exhausted = False
-    original_agent = agent
-
-    def safe_agent(obs_vec, state):
-        nonlocal credits_exhausted
-        if credits_exhausted:
-            return heuristic_fallback(obs_vec)
-        try:
-            return original_agent(obs_vec, state)
-        except Exception as e:
-            err = str(e).lower()
-            if "402" in str(e) or "depleted" in err:
-                credits_exhausted = True
-                print("[STEP] WARNING: API credits exhausted — switching to heuristic fallback.")
-            elif "401" in str(e) or "invalid" in err or "unauthorized" in err:
-                credits_exhausted = True
-                print("[STEP] WARNING: API auth failed — switching to heuristic fallback.")
-            else:
-                print(f"[STEP] WARNING: API error: {e} — using heuristic fallback.")
-            return heuristic_fallback(obs_vec)
-
-    t0      = time.time()
-    results = grade_all(safe_agent, n_episodes=N_EPS)
-    elapsed = time.time() - t0
-
-    # END log (required structured format)
-    # Scores must be strictly between 0 and 1 — enforce before printing
-    def safe_score(v):
-        return max(0.01, min(0.99, float(v)))
-
-    overall = safe_score(results["overall_score"])
-    easy_s  = safe_score(results["easy"]["score"])
-    med_s   = safe_score(results["medium"]["score"])
-    hard_s  = safe_score(results["hard"]["score"])
-
-    print("[END]")
-    print(f"[END] overall_score={overall}")
-    print(f"[END] easy_score={easy_s}")
-    print(f"[END] medium_score={med_s}")
-    print(f"[END] hard_score={hard_s}")
-    print(f"[END] elapsed={elapsed:.1f}s model={MODEL_NAME}")
-
-    out = {
-        "model":           MODEL_NAME,
-        "api_base_url":    API_BASE_URL,
-        "n_episodes":      N_EPS,
-        "results":         results,
-        "elapsed_seconds": round(elapsed, 2),
-    }
-    with open("baseline_results.json", "w") as f:
-        json.dump(out, f, indent=2)
-    print("[END] Saved → baseline_results.json")
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
