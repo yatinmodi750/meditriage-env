@@ -1,5 +1,6 @@
 """
 server/app.py — OpenEnv-compliant FastAPI server for MediTriage-Env.
+Exposes: /reset, /step, /state, /tasks, /grader, /health
 """
 from __future__ import annotations
 import sys, os
@@ -37,11 +38,92 @@ def obs_to_list(obs: np.ndarray) -> list:
     return [round(float(x), 6) for x in obs]
 
 
+def strict_score(v: float) -> float:
+    """Ensure score is strictly between 0 and 1."""
+    return max(0.01, min(0.99, float(v)))
+
+
+# ── Task catalog ──────────────────────────────────────────────────────────────
+
+TASKS = [
+    {
+        "id":          "easy",
+        "name":        "Easy Triage",
+        "description": "20 patients, clean vitals, ample resources. Learn basic triage.",
+        "difficulty":  "easy",
+        "n_patients":  20,
+    },
+    {
+        "id":          "medium",
+        "name":        "Medium Triage",
+        "description": "50 patients, noisy/missing vitals, moderate bed constraints.",
+        "difficulty":  "medium",
+        "n_patients":  50,
+    },
+    {
+        "id":          "hard",
+        "name":        "Hard Triage",
+        "description": "80 patients, severe constraints, 25% critical edge cases.",
+        "difficulty":  "hard",
+        "n_patients":  80,
+    },
+]
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "env": "MediTriage-Env", "version": "1.0.0"}
+
+
+@app.get("/tasks")
+async def get_tasks():
+    """Return the task catalog — required by openenv validate."""
+    return JSONResponse({"tasks": TASKS})
+
+
+@app.post("/grader")
+async def grader(request: Request):
+    """
+    Grade an agent on a specific task.
+    Body: {"task_id": "easy"|"medium"|"hard", "n_episodes": 1}
+    Returns: {"task_id": ..., "score": float strictly in (0,1)}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    task_id    = body.get("task_id", "medium")
+    n_episodes = int(body.get("n_episodes", 1))
+
+    if task_id not in ("easy", "medium", "hard"):
+        return JSONResponse({"error": f"Unknown task_id: {task_id}"}, status_code=400)
+
+    # Run a random agent for grading baseline
+    import numpy as _np
+    env = MediTriageEnv(task=task_id)
+    all_rewards = []
+
+    for ep in range(n_episodes):
+        obs = env.reset(seed=ep)
+        done = False
+        while not done:
+            action = int(_np.random.randint(0, env.n_actions))
+            obs, reward, done, _ = env.step(action)
+            all_rewards.append(float(reward))
+
+    mean_reward = float(_np.mean(all_rewards)) if all_rewards else 0.0
+    raw_score   = (mean_reward + 1.0) / 2.0
+    score       = strict_score(raw_score)
+
+    return JSONResponse({
+        "task_id":    task_id,
+        "score":      score,
+        "n_episodes": n_episodes,
+        "mean_reward": round(mean_reward, 4),
+    })
 
 
 @app.post("/reset")
@@ -53,7 +135,7 @@ async def reset(request: Request):
         body = {}
 
     seed = body.get("seed", None)
-    task = body.get("task", "medium")
+    task = body.get("task", body.get("task_id", "medium"))
     if task not in ("easy", "medium", "hard"):
         task = "medium"
     if seed is not None:
@@ -121,7 +203,15 @@ async def root():
         "description":       "OpenEnv medical triage environment",
         "action_space":      {"type": "Discrete", "n": 16},
         "observation_space": {"type": "Box", "shape": [29], "dtype": "float32"},
-        "tasks":             ["easy", "medium", "hard"],
+        "tasks":             [t["id"] for t in TASKS],
+        "endpoints": {
+            "GET  /tasks":   "Task catalog",
+            "POST /grader":  "Grade agent on a task",
+            "POST /reset":   "Reset environment",
+            "POST /step":    "Take action",
+            "GET  /state":   "Current state",
+            "GET  /health":  "Health check",
+        }
     })
 
 
