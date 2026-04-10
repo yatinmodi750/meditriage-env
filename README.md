@@ -27,7 +27,7 @@ An agent must simultaneously assign **priority levels (P1–P4)** and **route pa
 |---|---|
 | **Observation space** | `Box(29,)` — vitals, demographics, complaint, queue context |
 | **Action space** | `Discrete(16)` — (4 priorities) × (4 departments) |
-| **Reward** | `(-1.0, 1.0)` — balanced accuracy + routing + criticality |
+| **Reward** | `[-1.0, 1.0]` — balanced accuracy + routing + criticality |
 | **Tasks** | `easy` (20 patients) · `medium` (50) · `hard` (80) |
 | **API** | `step()` / `reset()` / `state()` |
 
@@ -210,35 +210,68 @@ python inference.py
 
 Run the heuristic baseline (no API key needed):
 
+```bash
+python scripts/baseline_inference.py
+```
 
 ---
 
 ## Project Structure
-
+ 
 ```
-meditriage-env/
-├── inference.py               # LLM inference script (competition entry)
-├── baseline_results.json      # Official LLM baseline scores
-├── setup.py                   # Package installation
-├── server.py                  # FastAPI HTTP Server
-├── openenv.yaml               # OpenEnv specification
-├── Dockerfile                 # HF Spaces deployment
+meditriage-env/                        ← project root
+│
+├── inference.py                       # LLM inference script (competition entry)
+├── client.py                          # Python client for training/evaluation code
+├── models.py                          # Top-level Pydantic model re-exports
+├── graders.py                         # Top-level grader re-exports
+├── server.py                          # Root-level FastAPI server (alias)
+│
+├── pyproject.toml                     # Python packaging (openenv validate)
+├── setup.py                           # Legacy packaging
+├── requirements.txt                   # Pip dependencies
+├── uv.lock                            # Locked dependencies (uv lock)
+├── openenv.yaml                       # OpenEnv specification
+├── Dockerfile                         # HF Spaces Docker deployment
 ├── README.md
+├── baseline_results.json              # Official LLM baseline scores
 │
-├── meditriage_env/            # Core environment package
-│   ├── __init__.py            # Package exports
-│   ├── env.py                 # MediTriageEnv — step/reset/state API
-│   ├── models.py              # Patient, Priority, Department typed models
-│   ├── patient_generator.py   # Procedural patient synthesis
-│   ├── reward.py              # Balanced reward function
-│   └── schemas.py             # Pydantic schemas (Observation, Action, Reward)
+├── meditriage_env/                    # Core environment package
+│   ├── __init__.py                    # Package exports
+│   ├── env.py                         # MediTriageEnv — step/reset/state API
+│   ├── models.py                      # Patient, Priority, Department typed models
+│   ├── patient_generator.py           # Procedural patient synthesis
+│   ├── reward.py                      # Balanced reward function
+│   └── schemas.py                     # Pydantic schemas (Observation, Action, Reward)
 │
-├── graders/                   # Task graders
+├── graders/                           # Task graders
 │   ├── __init__.py
-│   └── graders.py             # easy_grader, medium_grader, hard_grader, grade_all
+│   └── graders.py                     # easy_grader, medium_grader, hard_grader, grade_all
+│
+├── server/                            # OpenEnv HTTP server (required by openenv validate)
+│   ├── __init__.py
+│   └── app.py                         # FastAPI app — /reset, /step, /state, /tasks, /grader
 │
 └── scripts/
-    └── demo_app.py            # Gradio demo for Hugging Face Spaces
+    ├── demo_app.py                    # Gradio interactive demo
+    └── validate-submission.sh        # Pre-submission validator script
+```
+
+---
+
+## Pre-Submission Validation
+
+Run the official validator before submitting:
+
+```bash
+pip install openenv-core
+chmod +x scripts/validate-submission.sh
+./scripts/validate-submission.sh https://yatinm-meditriage-env.hf.space .
+```
+
+Or use the one-liner:
+```bash
+curl -fsSL https://raw.githubusercontent.com/yatinmodi750/meditriage-env/main/scripts/validate-submission.sh | bash -s -- https://yatinm-meditriage-env.hf.space .
 ```
 
 ---
